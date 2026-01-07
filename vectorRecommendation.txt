@@ -1,0 +1,54 @@
+                  ┌───────────────┐
+                  │   CONTENTS    │
+                  │ Movies/Series/│
+                  │    Reels      │
+                  └───────┬───────┘
+                          │
+                          │  Extract text
+                          ▼
+          ┌─────────────────────────────────┐
+          │ Create embedding vector for     │
+          │ each content using get_embedding│
+          │ (title + genres + description) │
+          └─────────────────────────────────┘
+                          │
+                          │ Store in MongoDB
+                          ▼
+          ┌─────────────────────────────────┐
+          │  User watches content           │
+          │  Add content_id to watch       │
+          │  collection & increment        │
+          │  popularity in content         │
+          └─────────────────────────────────┘
+                          │
+                          │ Compute user profile embedding
+                          ▼
+          ┌─────────────────────────────────┐
+          │  Take mean of embeddings of     │
+          │  watched content → user vector  │
+          └─────────────────────────────────┘
+                          │
+                          │ Candidate selection
+                          ▼
+          ┌─────────────────────────────────┐
+          │  Select contents not watched    │
+          │  Apply reels_only or movies/ser │
+          │  filter based on is_reel flag  │
+          └─────────────────────────────────┘
+                          │
+                          │ Compute scores
+                          ▼
+          ┌─────────────────────────────────┐
+          │  For each candidate:            │
+          │  ai_score = cosine_similarity   │
+          │  final_score = 0.7*ai_score +  │
+          │                0.3*popularity  │
+          └─────────────────────────────────┘
+                          │
+                          │ Sort by final_score (high → low)
+                          ▼
+                  ┌───────────────┐
+                  │   Recommendations   │
+                  │  Top N movies,      │
+                  │  series, reels      │
+                  └───────────────┘
