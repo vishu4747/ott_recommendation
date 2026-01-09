@@ -6,6 +6,8 @@ from app.db.connection import watch_collection, content_collection
 from app.ai.embeddings import get_embedding
 from app.recommender.ai_recommender import get_ai_recommendations
 from app.recommender.trending import get_trending_content
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
 
 app = FastAPI(title="OTT AI Recommendation Engine")
 
@@ -168,3 +170,122 @@ def check_content(content_id: int):
         return {"exists": False, "message": f"Content with id {content_id} not found."}
 
     return {"exists": True, "content": content}
+
+
+
+class SortRecommendationRequest(BaseModel):
+    user_id: int
+    content_ids: list[int]
+
+
+
+@app.post("/recommend/sort")
+def sort_contents_by_user_recommendation(payload: SortRecommendationRequest):
+    user_id = payload.user_id
+    content_ids = payload.content_ids
+
+    if not content_ids:
+        raise HTTPException(status_code=400, detail="content_ids cannot be empty")
+
+    # ---------------- USER WATCH HISTORY ----------------
+    user = watch_collection.find_one({"user_id": user_id})
+    watched_ids = user.get("watched", []) if user else []
+
+    # ---------------- FALLBACK: NO WATCH HISTORY ----------------
+    if not watched_ids:
+        contents = list(
+            content_collection.find(
+                {"content_id": {"$in": content_ids}},
+                {"_id": 0, "embedding": 0}  # remove embedding
+            )
+            .sort([
+                ("popularity", -1),
+                ("updated_at", -1)
+            ])
+        )
+
+        return {
+            "user_id": user_id,
+            "count": len(contents),
+            "data": contents
+        }
+
+    # ---------------- FETCH WATCHED CONTENT EMBEDDINGS ----------------
+    watched_contents = list(
+        content_collection.find(
+            {
+                "content_id": {"$in": watched_ids},
+                "embedding": {"$exists": True}
+            },
+            {"embedding": 1}
+        )
+    )
+
+    # If embeddings missing → fallback
+    if not watched_contents:
+        contents = list(
+            content_collection.find(
+                {"content_id": {"$in": content_ids}},
+                {"_id": 0, "embedding": 0}
+            )
+            .sort([
+                ("popularity", -1),
+                ("updated_at", -1)
+            ])
+        )
+
+        return {
+            "user_id": user_id,
+            "count": len(contents),
+            "data": contents
+        }
+
+    # ---------------- USER VECTOR ----------------
+    user_embedding = np.mean(
+        [c["embedding"] for c in watched_contents],
+        axis=0
+    ).reshape(1, -1)
+
+    # ---------------- FETCH CANDIDATES ----------------
+    candidates = list(
+        content_collection.find(
+            {
+                "content_id": {"$in": content_ids},
+                "embedding": {"$exists": True}
+            }
+        )
+    )
+
+    scored_results = []
+
+    for content in candidates:
+        ai_score = cosine_similarity(
+            user_embedding,
+            [content["embedding"]]
+        )[0][0]
+
+        popularity_score = content.get("popularity", 0) / 100
+        final_score = (0.7 * ai_score) + (0.3 * popularity_score)
+
+        # 🔥 Remove embedding before response
+        content.pop("embedding", None)
+        content.pop("_id", None)
+
+        content["score"] = round(float(final_score), 4)
+        scored_results.append(content)
+
+    # ---------------- FINAL SORT ----------------
+    scored_results.sort(
+        key=lambda x: (
+            x["score"],
+            x.get("popularity", 0),
+            x.get("updated_at", 0)
+        ),
+        reverse=True
+    )
+
+    return {
+        "user_id": user_id,
+        "count": len(scored_results),
+        "data": scored_results
+    }
