@@ -8,8 +8,9 @@ from app.recommender.ai_recommender import get_ai_recommendations
 from app.recommender.trending import get_trending_content
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
+from typing import List
 
-app = FastAPI(title="OTT AI Recommendation Engine")
+app = FastAPI(title="OTT AI Recommendation Engine", openapi_prefix="/ott")
 
 class Content(BaseModel):
     content_id: int
@@ -55,8 +56,12 @@ class WatchRequest(BaseModel):
 # ---------------------
 @app.post("/user/watch")
 def add_user_watch(request: WatchRequest):
-    valid_ids = [c["content_id"] for c in CONTENTS]
-    if request.content_id not in valid_ids:
+    content = content_collection.find_one(
+        {"content_id": request.content_id},
+        {"_id": 0}
+    )
+
+    if not content:
         raise HTTPException(status_code=400, detail="Invalid content_id")
 
     already_watched = watch_collection.find_one({
@@ -96,7 +101,10 @@ def add_user_watch(request: WatchRequest):
 # ---------------------
 @app.get("/contents")
 def contents():
-    return CONTENTS
+    contents = list(
+        content_collection.find({}, {"_id": 0, "embedding": 0})
+    )
+    return contents
 
 @app.get("/recommend/{user_id}")
 def recommend(user_id: int, limit: int = 5):
@@ -175,7 +183,7 @@ def check_content(content_id: int):
 
 class SortRecommendationRequest(BaseModel):
     user_id: int
-    content_ids: list[int]
+    content_ids: List[int]
 
 
 
@@ -267,7 +275,7 @@ def sort_contents_by_user_recommendation(payload: SortRecommendationRequest):
         popularity_score = content.get("popularity", 0) / 100
         final_score = (0.7 * ai_score) + (0.3 * popularity_score)
 
-        # 🔥 Remove embedding before response
+        # Remove embedding before response
         content.pop("embedding", None)
         content.pop("_id", None)
 
