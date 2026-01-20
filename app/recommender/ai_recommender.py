@@ -14,92 +14,76 @@ def get_cold_start_content(limit=10, reels_only=False):
         .limit(limit)
     )
 
-# def get_ai_recommendations(watched_ids, limit=5, reels_only=False):
-#     if not watched_ids:
-#         return get_trending_content(limit, reels_only)
 
-#     watched_contents = list(
-#         content_collection.find({"content_id": {"$in": watched_ids}})
-#     )
+def get_ai_recommendations(
+    watched_ids,
+    limit=5,
+    page=1,
+    reels_only=False
+):
+    # Normalize page
+    page = max(page, 1)
+    offset = (page - 1) * limit
 
-#     if not watched_contents:
-#         return get_trending_content(limit, reels_only)
-
-#     # Create user embedding
-#     user_embedding = np.mean(
-#         [c["embedding"] for c in watched_contents], axis=0
-#     ).reshape(1, -1)
-
-#     # Candidate query
-#     query = {"content_id": {"$nin": watched_ids}}
-#     if reels_only:
-#         query["$or"] = [{"is_reel": True}, {"is_reel": "true"}]
-#     else:
-#         query["$or"] = [{"is_reel": False}, {"is_reel": "false"}, {"is_reel": {"$exists": False}}]
-
-#     candidates = list(content_collection.find(query))
-
-#     results = []
-#     for content in candidates:
-#         if "embedding" not in content:
-#             continue
-#         ai_score = cosine_similarity(
-#             user_embedding, [content["embedding"]]
-#         )[0][0]
-#         popularity = content.get("popularity", 0) / 100
-#         final_score = (0.7 * ai_score) + (0.3 * popularity)
-
-#         results.append({
-#             "content_id": content["content_id"],
-#             "title": content["title"],
-#             "poster": content["poster"],
-#             "genres": content["genres"],
-#             "type": content["type"],
-#             "score": round(float(final_score), 4)
-#         })
-
-#     if not results:
-#         return get_trending_content(limit, reels_only)
-
-#     return sorted(results, key=lambda x: x["score"], reverse=True)[:limit]
-
-def get_ai_recommendations(watched_ids, limit=5, reels_only=False):
-    # If user has no watched ids, return default trending
+    # 🔹 Cold start
     if not watched_ids:
-        return get_trending_content(limit, reels_only)
+        data = get_trending_content(limit + 1, reels_only)
+        return {
+            "page": page,
+            "next_page": page + 1 if len(data) > limit else 0,
+            "data": data[:limit]
+        }
 
     watched_contents = list(
-        content_collection.find({"content_id": {"$in": watched_ids}})
+        content_collection.find(
+            {
+                "content_id": {"$in": watched_ids},
+                "embedding": {"$exists": True}
+            }
+        )
     )
 
-    # Fallback to trending if no embeddings found
+    # 🔹 No embeddings → trending
     if not watched_contents:
-        return get_trending_content(limit, reels_only)
+        data = get_trending_content(limit + 1, reels_only)
+        return {
+            "page": page,
+            "next_page": page + 1 if len(data) > limit else 0,
+            "data": data[:limit]
+        }
 
-    # User profile embedding
+    # 🔹 User embedding
     user_embedding = np.mean(
-        [c["embedding"] for c in watched_contents], axis=0
+        [c["embedding"] for c in watched_contents],
+        axis=0
     ).reshape(1, -1)
 
-    # Candidate query
-    query = {"content_id": {"$nin": watched_ids}}
+    # 🔹 Candidate query
+    query = {
+        "content_id": {"$nin": watched_ids},
+        "embedding": {"$exists": True}
+    }
+
     if reels_only:
         query["$or"] = [{"is_reel": True}, {"is_reel": "true"}]
     else:
-        query["$or"] = [{"is_reel": False}, {"is_reel": "false"}, {"is_reel": {"$exists": False}}]
+        query["$or"] = [
+            {"is_reel": False},
+            {"is_reel": "false"},
+            {"is_reel": {"$exists": False}}
+        ]
 
-    # Sort by _id descending (newer first)
     candidates = list(
         content_collection.find(query).sort("_id", -1)
     )
 
     results = []
+
     for content in candidates:
-        if "embedding" not in content:
-            continue
         ai_score = cosine_similarity(
             user_embedding, [content["embedding"]]
         )[0][0]
+
         popularity = content.get("popularity", 0) / 100
         final_score = (0.7 * ai_score) + (0.3 * popularity)
 
@@ -112,11 +96,23 @@ def get_ai_recommendations(watched_ids, limit=5, reels_only=False):
             "score": round(float(final_score), 4)
         })
 
-    # Fallback to trending if AI results empty
+    # 🔹 AI empty → trending
     if not results:
-        return get_trending_content(limit, reels_only)
+        data = get_trending_content(limit + 1, reels_only)
+        return {
+            "page": page,
+            "next_page": page + 1 if len(data) > limit else 0,
+            "data": data[:limit]
+        }
 
-    # Sort by final score DESC, but prioritize newer _id first
+    # 🔹 Sort by relevance, then freshness
     results.sort(key=lambda x: (-x["score"], -x["content_id"]))
 
-    return results[:limit]
+    # 🔹 Pagination slice
+    paginated = results[offset : offset + limit + 1]
+
+    return {
+        "page": page,
+        "next_page": page + 1 if len(paginated) > limit else 0,
+        "data": paginated[:limit]
+    }

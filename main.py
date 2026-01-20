@@ -107,16 +107,27 @@ def contents():
     return contents
 
 @app.get("/recommend/{user_id}")
-def recommend(user_id: int, limit: int = 5):
+def recommend(
+    user_id: int,
+    limit: int = 5,
+    page: int = 1
+):
     user = watch_collection.find_one({"user_id": user_id})
+
     watched = user.get("watched", []) if user else []
-    return get_ai_recommendations(watched, limit)
+
+    return get_ai_recommendations(
+        watched_ids=watched,
+        limit=limit,
+        page=page
+    )
+
 
 @app.get("/recommend/reels/{user_id}")
-def recommend_reels(user_id: int, limit: int = 5):
+def recommend_reels(user_id: int, limit: int = 5, page: int = 1):
     user = watch_collection.find_one({"user_id": user_id})
     watched = user.get("watched", []) if user else []
-    return get_ai_recommendations(watched, limit, reels_only=True)
+    return get_ai_recommendations(watched, limit=limit, page=page , reels_only=True)
 
 @app.get("/trending")
 def trending(limit: int = 10):
@@ -162,7 +173,7 @@ def save_content(content: Content):
     )
 
     # Fetch the updated/added document
-    saved_doc = content_collection.find_one({"content_id": content.content_id}, {"_id": 0})
+    saved_doc = content_collection.find_one({"content_id": content.content_id}, {"_id": 0, "embedding": 0})
 
     return {"status": "success", "content": saved_doc}
 
@@ -296,4 +307,41 @@ def sort_contents_by_user_recommendation(payload: SortRecommendationRequest):
         "user_id": user_id,
         "count": len(scored_results),
         "data": scored_results
+    }
+
+class ContentList(BaseModel):
+    contents: List[Content]
+
+@app.post("/content/save/bulk")
+def save_multiple_contents(payload: ContentList):
+    saved_contents = []
+
+    for content in payload.contents:
+        # Generate embedding
+        text = f"{content.title} {' '.join(content.genres)}"
+        embedding = get_embedding(text)
+
+        doc = content.dict()
+        doc["embedding"] = embedding
+
+        # Upsert
+        content_collection.update_one(
+            {"content_id": content.content_id},
+            {"$set": doc},
+            upsert=True
+        )
+
+        # Fetch saved content without embedding
+        saved_doc = content_collection.find_one(
+            {"content_id": content.content_id},
+            {"_id": 0, "embedding": 0}
+        )
+
+        if saved_doc:
+            saved_contents.append(saved_doc)
+
+    return {
+        "status": "success",
+        "count": len(saved_contents),
+        "contents": saved_contents
     }
